@@ -31,6 +31,7 @@ const int WaterValue = 1280;
 bool waitingForUpdate = false;
 
 long lastOtaWindow = 0;
+bool noMessageRecievedYet = true;
 String ota = "/ota";
 String wildcard = "/#";
 String otaTopic = espName + ota;
@@ -60,6 +61,7 @@ void setup() {
   delay(500);
   Serial.begin(9600);
   ++bootCount;
+  noMessageRecievedYet = true;
 
   Serial.println("Woke up #: " + String(bootCount));
 
@@ -72,6 +74,12 @@ void setup() {
   client.setCallback(message_callback);
   //time to sleep
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+
+  myLoop();
+
+  Serial.println("Entering deep sleep");
+  delay(100);
+  esp_deep_sleep_start();
 }
 
 bool setup_wifi() {
@@ -119,6 +127,7 @@ void message_callback(char* topic, byte* payload, unsigned int length) {
       disableOta();
       
     }
+    noMessageRecievedYet = false;
   }
 }
 
@@ -168,24 +177,25 @@ void disableOta() {
 
 bool isOtaWindow(){
   long now = millis();
-  bool pendingOtaWindow =  (lastOtaWindow + 1000) > now;
   bool otaActivation = ( bootCount % 3 == 0) && now < 10000;
   if (otaActivation ) {
     lastOtaWindow = now;
   }
-  bool result = otaActivation || pendingOtaWindow;
+  bool result = otaActivation && noMessageRecievedYet;
   if (result) {
     Serial.println("-- In OTA Window --");
   }
   return result;
 }
 
-void loop() {
+void loop() {}
 
-#ifndef ESP32_RTOS
+void myLoop() {
+ while(waitingForUpdate || isOtaWindow()) {
+  #ifndef ESP32_RTOS
 ArduinoOTA.handle();
 #endif
- 
+
   if (!client.connected()) {
     reconnect();
   }
@@ -205,8 +215,7 @@ ArduinoOTA.handle();
       Serial.println("Writting on MQTT");
       if(
         send_MQTT_message(String(reading).c_str(), "sensor/water_tank") &&
-        send_MQTT_message(String(moisture1).c_str(), "sensor/soil_moisture_1") &&
-        send_MQTT_message(String(moisture1).c_str(), "coucou")
+        send_MQTT_message(String(moisture1).c_str(), "sensor/soil_moisture_1")
         ) {
             Serial.println("MQTT message published successfully");
             
@@ -215,17 +224,10 @@ ArduinoOTA.handle();
         }
       }
     }
-  
-    if(waitingForUpdate || isOtaWindow()) {
-       delay(50);  
-       } else {
-      Serial.println("Entering deep sleep");
-      delay(200);
-      esp_deep_sleep_start();
-    
+   delay(50);  
     }
+ }
 
-}
 
 //Function that prints the reason by which ESP32 has been awaken from sleep
 void print_wakeup_reason(){
