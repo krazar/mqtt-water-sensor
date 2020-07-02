@@ -4,40 +4,60 @@
 #include <PubSubClient.h>
 #include <NewPing.h>
 
-unsigned long entry;
-
 // ESP device
 const char* espName = "ESP32-Dev-1";
 
-//sleeping options between reads
-#define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
-#define TIME_TO_SLEEP  5
-
-//boot counter for potential shutdowns
-RTC_DATA_ATTR int bootCount = 0;
-touch_pad_t touchPin;
+#define TIME_TO_SLEEP  60
 
 // Define Trig and Echo pin:
+#define voltagePin 2
 #define trigPin 14
 #define echoPin 5
 #define MAX_DISTANCE 400
 
 // Moisture setup
-const int AirValue = 3607;   //you need to replace this value with Value_1
-const int WaterValue = 1280;
+const int AirValue = 3607;
+const int WaterValue = 1280;  
 #define soilPin1 35
 
-// OTA topic
-bool waitingForUpdate = false;
 
-long lastOtaWindow = 0;
-bool noMessageRecievedYet = true;
 String ota = "/ota";
 String wildcard = "/#";
 String otaTopic = espName + ota;
 String espTopic = espName + wildcard;
 
+/* switch mqtt for hassio to enable ota mode
+ * - platform: mqttf
+  name: "esp32-dev1"
+  command_topic: "ESP32-Dev-1/ota"
+  optimistic: true
+  payload_on: "1"
+  payload_off: "0"
+  retain: true
+ */
+
+
+//boot counter for potential shutdowns
+RTC_DATA_ATTR int bootCount = 0;
+touch_pad_t touchPin;
+
+//sleeping options between reads
+#define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
+
+
+// wifi and mqtt reconnect
+uint8_t wifi_failures = 0;
+uint8_t mqtt_failures = 0;
+
+
+// OTA topic
+unsigned long entry;
+bool waitingForUpdate = false;
+long lastOtaWindow = 0;
+bool noMessageRecievedYet = true;
+
 //sonar object to deal with the bloody ultrasonic stuff
+
 NewPing sonar(trigPin, echoPin, MAX_DISTANCE);
 
 //wifi and MQTT objects
@@ -50,16 +70,19 @@ int value = 0;
 void setup() {
 
   Serial.begin(115200);
+  //wait for serial, remove prod
+  //delay(1000);
   Serial.println("Booting");
 
   setupOTA(espName);
   
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
+  pinMode(voltagePin, OUTPUT);
+
+  wifi_failures = 0;
+  mqtt_failures = 0;
   
-  //SERIAL CRAP, remove in prod
-  delay(500);
-  Serial.begin(9600);
   ++bootCount;
   noMessageRecievedYet = true;
 
@@ -69,17 +92,25 @@ void setup() {
   print_wakeup_reason();
   print_wakeup_touchpad();
 
+  digitalWrite(voltagePin, HIGH);
   setup_wifi();
+
+  
   client.setServer(mqttHost, mqttPort);
   client.setCallback(message_callback);
   //time to sleep
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+  Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) +
+  " Seconds");
 
   myLoop();
 
   Serial.println("Entering deep sleep");
+  Serial.flush(); 
+  digitalWrite(voltagePin, LOW);
   delay(100);
   esp_deep_sleep_start();
+  Serial.println("This will never be printed");
 }
 
 bool setup_wifi() {
@@ -89,8 +120,6 @@ bool setup_wifi() {
   Serial.println(mySSID);
 
   WiFi.begin(mySSID, myPASSWORD);
-
-  uint8_t wifi_failures=0;
   
   while (WiFi.status() != WL_CONNECTED || wifi_failures > 10) {
     ArduinoOTA.handle();
@@ -152,6 +181,7 @@ void reconnect() {
       // Subscribe
       client.subscribe(espTopic.c_str());
     } else {
+      mqtt_failures++;
       Serial.print("failed, rc=");
       Serial.print(client.state());
       Serial.println(" try again in 5 seconds");
@@ -177,7 +207,7 @@ void disableOta() {
 
 bool isOtaWindow(){
   long now = millis();
-  bool otaActivation = ( bootCount % 3 == 0) && now < 10000;
+  bool otaActivation = ( bootCount % 2 == 0) && now < (5000 + (5000 *(wifi_failures + mqtt_failures)));
   if (otaActivation ) {
     lastOtaWindow = now;
   }
