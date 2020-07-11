@@ -10,9 +10,9 @@ const char* espName = "ESP32-Dev-1";
 #define TIME_TO_SLEEP  60
 
 // Define Trig and Echo pin:
-#define voltagePin 2
+#define voltagePin 13
 #define trigPin 14
-#define echoPin 5
+#define echoPin 12
 #define MAX_DISTANCE 400
 
 // Moisture setup
@@ -103,11 +103,12 @@ void setup() {
   Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) +
   " Seconds");
 
+  measureAndPublishData();
   myLoop();
 
+  digitalWrite(voltagePin, LOW);
   Serial.println("Entering deep sleep");
   Serial.flush(); 
-  digitalWrite(voltagePin, LOW);
   delay(100);
   esp_deep_sleep_start();
   Serial.println("This will never be printed");
@@ -222,7 +223,8 @@ void loop() {}
 
 void myLoop() {
  while(waitingForUpdate || isOtaWindow()) {
-  #ifndef ESP32_RTOS
+
+#ifndef ESP32_RTOS
 ArduinoOTA.handle();
 #endif
 
@@ -230,34 +232,39 @@ ArduinoOTA.handle();
     reconnect();
   }
   client.loop();
-
-  long now = millis();
-  if (now - lastMsg > 5000) {
-    lastMsg = now;
-    Serial.println("Getting a reading");
-    unsigned int reading = sonar.convert_cm(sonar.ping_median(5));
-  
-    int moisture1 = getMoistureSensorValue(soilPin1);
-    
-    if (reading) {
-      Serial.println("Reading succesfull");
-     
-      Serial.println("Writting on MQTT");
-      if(
-        send_MQTT_message(String(reading).c_str(), "sensor/water_tank") &&
-        send_MQTT_message(String(moisture1).c_str(), "sensor/soil_moisture_1")
-        ) {
-            Serial.println("MQTT message published successfully");
-            
-        } else {
-            Serial.println("MQTT Issue. Trying later");
-        }
-      }
-    }
-   delay(50);  
-    }
+  delay(200);  
+  }
  }
 
+ void measureAndPublishData() {
+
+  if (!client.connected()) {
+    reconnect();
+  }
+
+  long now = millis();
+  
+  Serial.println("Getting a reading");
+  unsigned int reading = sonar.convert_cm(sonar.ping_median(5));
+
+  //int moisture1 = getMoistureSensorValue(soilPin1);
+  
+  if (reading) {
+    Serial.println("Reading succesfull");
+   
+    Serial.println("Writting on MQTT");
+    if(
+      send_MQTT_message(String(reading).c_str(), "sensor/water_tank") 
+      //&& send_MQTT_message(String(moisture1).c_str(), "sensor/soil_moisture_1")
+      ) {
+          Serial.println("MQTT message published successfully");
+          
+      } else {
+          Serial.println("MQTT Issue. Trying later");
+      }
+    }
+  }
+    
 
 //Function that prints the reason by which ESP32 has been awaken from sleep
 void print_wakeup_reason(){
