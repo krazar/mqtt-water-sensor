@@ -4,21 +4,23 @@
 #include <PubSubClient.h>
 #include <NewPing.h>
 
-// ESP device
+// ESP device: 192.168.2.10
 const char* espName = "ESP32-Dev-1";
 
-#define TIME_TO_SLEEP  60
+
+#define TIME_TO_SLEEP  15
 
 // Define Trig and Echo pin:
 #define voltagePin 13
 #define trigPin 14
 #define echoPin 12
-#define MAX_DISTANCE 400
+#define MAX_DISTANCE 180
 
 // Moisture setup
 const int AirValue = 3607;
 const int WaterValue = 1280;  
 #define soilPin1 35
+#define voltageSoilPin1 34
 
 
 String ota = "/ota";
@@ -43,6 +45,7 @@ touch_pad_t touchPin;
 
 //sleeping options between reads
 #define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
+#define S_TO_M_FACTOR 60
 
 
 // wifi and mqtt reconnect
@@ -79,6 +82,7 @@ void setup() {
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
   pinMode(voltagePin, OUTPUT);
+  pinMode(voltageSoilPin1, OUTPUT);
 
   wifi_failures = 0;
   mqtt_failures = 0;
@@ -88,25 +92,24 @@ void setup() {
 
   Serial.println("Woke up #: " + String(bootCount));
 
-  //Print the wakeup reason for ESP32
-  print_wakeup_reason();
-  print_wakeup_touchpad();
-
   digitalWrite(voltagePin, HIGH);
+  digitalWrite(voltageSoilPin1, HIGH);
   setup_wifi();
 
   
   client.setServer(mqttHost, mqttPort);
   client.setCallback(message_callback);
   //time to sleep
-  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR * S_TO_M_FACTOR);
   Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) +
-  " Seconds");
+  " Minutes");
 
   measureAndPublishData();
   myLoop();
 
   digitalWrite(voltagePin, LOW);
+  digitalWrite(voltageSoilPin1, LOW);
+  
   Serial.println("Entering deep sleep");
   Serial.flush(); 
   delay(100);
@@ -140,7 +143,7 @@ bool setup_wifi() {
 }
 
 bool send_MQTT_message(const char* message, const char* topic) {
-  client.publish(topic, message);  
+  client.publish(topic, message, true);  
   return true;
 }
 
@@ -151,24 +154,24 @@ void message_callback(char* topic, byte* payload, unsigned int length) {
     int otaEnabled = (int) payload[0] - '0';
     Serial.print("ota status: ");
     Serial.println(otaEnabled);
-    if(otaEnabled == 1) {
-      enableOta();
-    } else {
-      disableOta();
-      
-    }
+    switchOta(otaEnabled);
     noMessageRecievedYet = false;
   }
 }
 
 
-int getMoistureSensorValue(const int pin) {
+char* getMoistureSensorValue(const int pin) {
+  char payload[100];
   unsigned int soilMoistureValue = analogRead(pin);
   String message = "Moisture reading: ";
   String result = message  + soilMoistureValue;
   Serial.println(result);
   unsigned int soilMoisturePercent = map(soilMoistureValue, AirValue, WaterValue, 0, 100);
-  return map(soilMoistureValue, AirValue, WaterValue, 0, 100);
+  
+  sprintf(payload, "%s", ""); // Cleans the payload content
+  sprintf(payload, "{\"raw\": %s", String(soilMoistureValue)); // Adds the value
+  sprintf(payload, "%s, \"pc\": \"%s\"}", payload, String(soilMoisturePercent)); // Adds percent
+  return payload;
 }
 
 void reconnect() {
@@ -192,16 +195,10 @@ void reconnect() {
   }
 }
 
-void enableOta() {
-  if(!waitingForUpdate) {
-    Serial.println("enabling ota");
+void switchOta(int state) {
+  if(state == 1) {
     waitingForUpdate = true;
-  }
-}
-
-void disableOta() {
-  if(waitingForUpdate) {
-    Serial.println("disabling ota");
+  } else {
     waitingForUpdate = false;
   }
 }
@@ -245,17 +242,16 @@ ArduinoOTA.handle();
   long now = millis();
   
   Serial.println("Getting a reading");
-  unsigned int reading = sonar.convert_cm(sonar.ping_median(5));
+  unsigned int reading = sonar.convert_cm(sonar.ping_median(5)) - 20;
 
-  //int moisture1 = getMoistureSensorValue(soilPin1);
-  
+  // char* moisture1 = getMoistureSensorValue(soilPin1);
   if (reading) {
     Serial.println("Reading succesfull");
    
     Serial.println("Writting on MQTT");
     if(
       send_MQTT_message(String(reading).c_str(), "sensor/water_tank") 
-      //&& send_MQTT_message(String(moisture1).c_str(), "sensor/soil_moisture_1")
+      && send_MQTT_message(String(349).c_str(), "sensor/soil_moisture_1")
       ) {
           Serial.println("MQTT message published successfully");
           
@@ -265,43 +261,3 @@ ArduinoOTA.handle();
     }
   }
     
-
-//Function that prints the reason by which ESP32 has been awaken from sleep
-void print_wakeup_reason(){
-  esp_sleep_wakeup_cause_t wakeup_reason;
-  wakeup_reason = esp_sleep_get_wakeup_cause();
-  switch(wakeup_reason)
-  {
-    case 1  : Serial.println("Wakeup caused by external signal using RTC_IO"); break;
-    case 2  : Serial.println("Wakeup caused by external signal using RTC_CNTL"); break;
-    case 3  : Serial.println("Wakeup caused by timer"); break;
-    case 4  : Serial.println("Wakeup caused by touchpad"); break;
-    case 5  : Serial.println("Wakeup caused by ULP program"); break;
-    default : Serial.println("Wakeup was not caused by deep sleep"); break;
-  }
-}
-
-/*
-Method to print the touchpad by which ESP32
-has been awaken from sleep
-*/
-void print_wakeup_touchpad(){
-  touch_pad_t pin;
-
-  touchPin = esp_sleep_get_touchpad_wakeup_status();
-
-  switch(touchPin)
-  {
-    case 0  : Serial.println("Touch detected on GPIO 4"); break;
-    case 1  : Serial.println("Touch detected on GPIO 0"); break;
-    case 2  : Serial.println("Touch detected on GPIO 2"); break;
-    case 3  : Serial.println("Touch detected on GPIO 15"); break;
-    case 4  : Serial.println("Touch detected on GPIO 13"); break;
-    case 5  : Serial.println("Touch detected on GPIO 12"); break;
-    case 6  : Serial.println("Touch detected on GPIO 14"); break;
-    case 7  : Serial.println("Touch detected on GPIO 27"); break;
-    case 8  : Serial.println("Touch detected on GPIO 33"); break;
-    case 9  : Serial.println("Touch detected on GPIO 32"); break;
-    default : Serial.print("Wakeup not by touchpad "); Serial.print(touchPin);break;
-  }
-}
