@@ -76,8 +76,8 @@ void setup() {
   //wait for serial, remove prod
   //delay(1000);
   Serial.println("Booting");
-
-  setupOTA(espName);
+  
+  //setupOTA(espName);
   
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
@@ -94,7 +94,7 @@ void setup() {
 
   digitalWrite(voltagePin, HIGH);
   digitalWrite(voltageSoilPin1, HIGH);
-  setup_wifi();
+  //setup_wifi();
 
   
   client.setServer(mqttHost, mqttPort);
@@ -235,9 +235,6 @@ ArduinoOTA.handle();
 
  void measureAndPublishData() {
 
-  if (!client.connected()) {
-    reconnect();
-  }
 
   long now = millis();
   
@@ -246,18 +243,9 @@ ArduinoOTA.handle();
 
   // char* moisture1 = getMoistureSensorValue(soilPin1);
   if (reading) {
-    Serial.println("Reading succesfull");
-   
+    Serial.println("Reading succesfull: " + String(reading));
+  }
     Serial.println("Writting on MQTT");
-    if(
-      send_MQTT_message(String(reading).c_str(), "sensor/water_tank") 
-      && send_MQTT_message(String(349).c_str(), "sensor/soil_moisture_1")
-      ) {
-          Serial.println("MQTT message published successfully");
-          
-      } else {
-          Serial.println("MQTT Issue. Trying later");
-      }
-    }
+delay(5000);
   }
     
