@@ -1,6 +1,6 @@
 //OTA include
 #include "OTA.h"
-
+#include "SoilSensor.h"
 #include <PubSubClient.h>
 #include <NewPing.h>
 
@@ -28,6 +28,7 @@ String espTopic = espName + wildcard;
 
 //boot counter for potential shutdowns
 RTC_DATA_ATTR int bootCount = 0;
+RTC_DATA_ATTR int savedReading = 0;
 touch_pad_t touchPin;
 
 //sleeping options between reads
@@ -45,10 +46,14 @@ bool noMessageRecievedYet = true;
 
 NewPing sonar(trigPin, echoPin, MAX_DISTANCE);
 
+#define SENSOR_SIZE 1
+SoilSensor sensors[]  = {SoilSensor("SoilSensor-1", 32, 33, 5000, 1226)};
+
 //wifi and MQTT objects
 WiFiClient espClient;
 PubSubClient client(espClient);
 long duration = 0;
+bool debugConnection = true;
 
 void setup() {
 
@@ -66,7 +71,6 @@ void setup() {
 
   Serial.println("Woke up #: " + String(bootCount));
   digitalWrite(voltagePin, HIGH);
-
   
   client.setServer(mqttHost, mqttPort);
   client.setCallback(message_callback);
@@ -76,10 +80,50 @@ void setup() {
   " Minutes");
 
   int reading = measureData();
-  measureAndPublishData(reading);
-  myLoop();
 
   digitalWrite(voltagePin, LOW);
+  
+  
+  if((reading && savedReading != reading) || bootCount % 4 == 0) {
+    savedReading = reading;
+    long startTime = millis();
+
+    
+    if(!setupOTA(espName)) {
+      esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP_LONG * uS_TO_S_FACTOR * S_TO_M_FACTOR);
+      Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP_LONG) + " Minutes");  
+    } else {
+      duration = millis() - startTime;
+    
+      // configure time to sleep
+      esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR * S_TO_M_FACTOR);
+      Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) + " Minutes");  
+    
+      client.setServer(mqttHost, mqttPort);
+      client.setCallback(message_callback);
+
+       for(int i = 0; i<SENSOR_SIZE; i++){
+         sensors[i].enable();
+      }
+    
+      measureAndPublishData(reading);
+
+      for(int j = 0; j<SENSOR_SIZE; j++){
+      sensors[j].disable();
+     }
+     
+      myLoop();  
+      
+    }
+  
+  
+  } else {
+    Serial.println("Don't send reading or no reading");
+    esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR * S_TO_M_FACTOR);
+     Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) + " Minutes");  
+  }
+
+  
   Serial.println("Entering deep sleep");
   Serial.flush(); 
   delay(100);
@@ -118,7 +162,7 @@ void reconnect() {
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
+      Serial.println(" try again in 1 seconds");
       // Wait 1 seconds before retrying
       delay(1000);
     }
@@ -175,10 +219,33 @@ ArduinoOTA.handle();
   }
 
 void measureAndPublishData(int reading) {
-
+  if (!client.connected()) {
+    reconnect();
+  }
+  
   if (reading) {
     Serial.println("Publishing reading");
   }
+
+  if(debugConnection) {
+    String debug = "debug/";
+    String tN = espName + debug;
+    char tC[20]; 
+    tN.toCharArray(tC, 20);
+    send_MQTT_message(String(duration).c_str(), tC);   
+  }
+
+  for(int i = 0; i<SENSOR_SIZE; i++){
+    char result[100];
+    sensors[i].getMoistureSensorValue(result);
+    Serial.println(String(result));
+    String topicName = "sensor/" + sensors[i].getName();
+    char topicChar[20]; 
+    topicName.toCharArray(topicChar, 20);
+    send_MQTT_message(result, topicChar);
+  }
+  Serial.println("MQTT message published successfully");        
+  
 }
     
     
