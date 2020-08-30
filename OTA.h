@@ -14,6 +14,9 @@
 const char* ssid = mySSID;
 const char* password = myPASSWORD;
 
+uint8_t wifi_failures = 0;
+uint8_t WIFI_MAX_ATTEMPT = 30;
+
 #if defined(ESP32_RTOS) && defined(ESP32)
 void taskOne( void * parameter )
 {
@@ -22,7 +25,7 @@ void taskOne( void * parameter )
 }
 #endif
 
-void setupOTA(const char* nameprefix) {
+bool setupOTA(const char* nameprefix) {
   const int maxlen = 40;
   char fullhostname[maxlen];
   uint8_t mac[6];
@@ -32,10 +35,13 @@ void setupOTA(const char* nameprefix) {
   
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Serial.println("Connection Failed! Rebooting...");
-    delay(5000);
-    ESP.restart();
+  while (WiFi.status() != WL_CONNECTED && wifi_failures < WIFI_MAX_ATTEMPT) {
+    delay(100);
+    Serial.print(".");
+    wifi_failures++;
+  }
+  if(wifi_failures >= WIFI_MAX_ATTEMPT){
+    return false;
   }
 
   // Port defaults to 3232
@@ -89,4 +95,5 @@ void setupOTA(const char* nameprefix) {
     1,                /* Priority of the task. */
     NULL);            /* Task handle. */
 #endif
+return true;
 }
