@@ -34,6 +34,7 @@ bool setupOTA(const char* nameprefix) {
   ArduinoOTA.setHostname(fullhostname);
   
   WiFi.mode(WIFI_STA);
+  WiFi.config(IPAddress(192, 168, 2, 32), IPAddress(192, 168, 2, 1), IPAddress(255, 255, 255, 0));
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED && wifi_failures < WIFI_MAX_ATTEMPT) {
     delay(100);

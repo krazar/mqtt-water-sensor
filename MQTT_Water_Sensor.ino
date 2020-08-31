@@ -4,11 +4,11 @@
 #include <PubSubClient.h>
 #include <NewPing.h>
 
-// ESP device: 192.168.2.10
-const char* espName = "ESP32-Dev-1";
+// ESP device: 192.168.2.32
+const char* espName = "ESP32-1";
 
 
-#define TIME_TO_SLEEP  1
+#define TIME_TO_SLEEP  15
 #define TIME_TO_SLEEP_LONG  60
 
 // Define Trig and Echo pin:
@@ -25,6 +25,9 @@ String ota = "/ota";
 String wildcard = "/#";
 String otaTopic = espName + ota;
 String espTopic = espName + wildcard;
+
+uint8_t MQTT_MAX_RETRIES = 3;
+uint8_t mqtt_failures = 0;
 
 //boot counter for potential shutdowns
 RTC_DATA_ATTR int bootCount = 0;
@@ -53,13 +56,14 @@ SoilSensor sensors[]  = {SoilSensor("SoilSensor-1", 32, 33, 5000, 1226)};
 WiFiClient espClient;
 PubSubClient client(espClient);
 long duration = 0;
-bool debugConnection = true;
+long startTime = 0;
+bool debugConnection = false;
 
 void setup() {
 
   Serial.begin(115200);
   
-  delay(1000);
+  //delay(1000);
   Serial.println("Booting");
   
   pinMode(trigPin, OUTPUT);
@@ -75,10 +79,7 @@ void setup() {
   client.setServer(mqttHost, mqttPort);
   client.setCallback(message_callback);
   //time to sleep
-  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR * S_TO_M_FACTOR);
-  Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) +
-  " Minutes");
-
+  
   int reading = measureData();
 
   digitalWrite(voltagePin, LOW);
@@ -86,7 +87,7 @@ void setup() {
   
   if((reading && savedReading != reading) || bootCount % 4 == 0) {
     savedReading = reading;
-    long startTime = millis();
+    startTime = millis();
 
     
     if(!setupOTA(espName)) {
@@ -98,9 +99,6 @@ void setup() {
       // configure time to sleep
       esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR * S_TO_M_FACTOR);
       Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) + " Minutes");  
-    
-      client.setServer(mqttHost, mqttPort);
-      client.setCallback(message_callback);
 
        for(int i = 0; i<SENSOR_SIZE; i++){
          sensors[i].enable();
@@ -149,9 +147,9 @@ void message_callback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
-void reconnect() {
+boolean reconnect() {
   // Loop until we're reconnected
-  while (!client.connected()) {
+  while (!client.connected() && mqtt_failures < MQTT_MAX_RETRIES) {
     ArduinoOTA.handle();
     Serial.print("Attempting MQTT connection...");
     // Attempt to connect
@@ -159,7 +157,9 @@ void reconnect() {
       Serial.println("connected");
       // Subscribe
       client.subscribe(espTopic.c_str());
+      return true;
     } else {
+      mqtt_failures++;
       Serial.print("failed, rc=");
       Serial.print(client.state());
       Serial.println(" try again in 1 seconds");
@@ -179,7 +179,7 @@ void switchOta(int state) {
 
 bool isOtaWindow(){
   long now = millis();
-  bool otaActivation = ( bootCount % 2 == 0) && now < (5000 + (100 * wifi_failures ));
+  bool otaActivation = ( bootCount % 2 == 0) && now < (3000 + (100 * wifi_failures ) + 1000 * (mqtt_failures));
   if (otaActivation ) {
     lastOtaWindow = now;
   }
@@ -200,7 +200,7 @@ ArduinoOTA.handle();
 #endif
 
   if (!client.connected()) {
-    reconnect();
+    
   }
   client.loop();
   delay(200);  
@@ -219,20 +219,27 @@ ArduinoOTA.handle();
   }
 
 void measureAndPublishData(int reading) {
-  if (!client.connected()) {
-    reconnect();
+  if (!client.connected() && !reconnect()){
+    return;
   }
   
   if (reading) {
     Serial.println("Publishing reading");
+    if(reading > 180) {
+      send_MQTT_message(String(reading).c_str(), "sensor/water_tank/bad");
+    } else {
+      send_MQTT_message(String(reading).c_str(), "sensor/water_tank");  
+    }
   }
 
   if(debugConnection) {
-    String debug = "debug/";
+    String debug = "/debug";
     String tN = espName + debug;
     char tC[20]; 
     tN.toCharArray(tC, 20);
     send_MQTT_message(String(duration).c_str(), tC);   
+    send_MQTT_message(String(startTime).c_str(), tC);   
+    send_MQTT_message(String(millis()).c_str(), tC);   
   }
 
   for(int i = 0; i<SENSOR_SIZE; i++){
